@@ -318,12 +318,6 @@ process.on("SIGINT", async () => {
   process.exit(0);
 });
 
-app.use(express.static("output"), {
-  maxAge: "1h",
-  eTag: true,
-  lastModified: true,
-});
-
 app.listen(PORT, async () => {
   console.log(`Server running on http://localhost:${PORT}`);
   console.log(`Output directory: ${path.resolve(outputDir)}`);
