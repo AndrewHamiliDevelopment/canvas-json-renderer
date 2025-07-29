@@ -1,5 +1,5 @@
 import express from "express"
-import { createCanvas, loadImage } from "canvas"
+import puppeteer from "puppeteer"
 import fs from "fs"
 import path from "path"
 
@@ -13,176 +13,106 @@ if (!fs.existsSync(outputDir)) {
   fs.mkdirSync(outputDir)
 }
 
-async function renderFabricCanvasFromJSON(fabricData) {
-  const canvas = createCanvas(800, 700)
-  const ctx = canvas.getContext("2d")
+// HTML template with Fabric.js
+const htmlTemplate = `
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.0/fabric.min.js"></script>
+    <style>
+        body { margin: 0; padding: 20px; background: white; }
+        #canvas-container { display: inline-block; }
+    </style>
+</head>
+<body>
+    <div id="canvas-container">
+        <canvas id="canvas"></canvas>
+    </div>
+    
+    <script>
+        window.renderFabricCanvas = function(fabricData) {
+            return new Promise((resolve, reject) => {
+                try {
+                    // Create canvas with size from data or default
+                    const canvasWidth = fabricData.width || 800;
+                    const canvasHeight = fabricData.height || 700;
+                    
+                    const canvas = new fabric.Canvas('canvas', {
+                        width: canvasWidth,
+                        height: canvasHeight,
+                        backgroundColor: fabricData.backgroundColor || 'white'
+                    });
+                    
+                    // Load canvas from JSON
+                    canvas.loadFromJSON(fabricData, function() {
+                        canvas.renderAll();
+                        
+                        // Wait a bit for images to load
+                        setTimeout(() => {
+                            resolve('Canvas rendered successfully');
+                        }, 1000);
+                    });
+                    
+                } catch (error) {
+                    reject(error);
+                }
+            });
+        };
+    </script>
+</body>
+</html>
+`
 
-  ctx.fillStyle = "white"
-  ctx.fillRect(0, 0, 800, 700)
+let browser = null
 
-  if (fabricData.objects && Array.isArray(fabricData.objects)) {
-    for (const obj of fabricData.objects) {
-      await renderObjectWithOrigin(ctx, obj)
-    }
+// Initialize browser
+async function initBrowser() {
+  if (!browser) {
+    browser = await puppeteer.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    })
   }
-
-  return canvas
+  return browser
 }
 
-async function renderObjectWithOrigin(ctx, obj) {
-  if (obj.type === "group") {
-    // For groups, render children with proper origin handling
-    const groupX = obj.left || 0
-    const groupY = obj.top || 0
-    const groupWidth = obj.width || 0
-    const groupHeight = obj.height || 0
-    const groupOriginX = obj.originX || "left"
-    const groupOriginY = obj.originY || "top"
+// Render Fabric.js canvas to PNG
+async function renderCanvasToPNG(fabricData) {
+  const browser = await initBrowser()
+  const page = await browser.newPage()
 
-    // Calculate group's actual top-left position based on origin
-    let groupActualX = groupX
-    let groupActualY = groupY
-
-    if (groupOriginX === "center") {
-      groupActualX = groupX - groupWidth / 2
-    } else if (groupOriginX === "right") {
-      groupActualX = groupX - groupWidth
-    }
-
-    if (groupOriginY === "center") {
-      groupActualY = groupY - groupHeight / 2
-    } else if (groupOriginY === "bottom") {
-      groupActualY = groupY - groupHeight
-    }
-
-    if (obj.objects && Array.isArray(obj.objects)) {
-      for (const child of obj.objects) {
-        ctx.save()
-
-        // Child position relative to group's actual top-left
-        const childRelativeX = child.left || 0
-        const childRelativeY = child.top || 0
-        const childWidth = child.width || 0
-        const childHeight = child.height || 0
-        const childOriginX = child.originX || "left"
-        const childOriginY = child.originY || "top"
-
-        // Calculate child's absolute position
-        let childAbsoluteX = groupActualX + childRelativeX
-        let childAbsoluteY = groupActualY + childRelativeY
-
-        // Adjust for child's origin point
-        if (childOriginX === "center") {
-          childAbsoluteX = childAbsoluteX - childWidth / 2
-        } else if (childOriginX === "right") {
-          childAbsoluteX = childAbsoluteX - childWidth
-        }
-
-        if (childOriginY === "center") {
-          childAbsoluteY = childAbsoluteY - childHeight / 2
-        } else if (childOriginY === "bottom") {
-          childAbsoluteY = childAbsoluteY - childHeight
-        }
-
-        ctx.translate(childAbsoluteX, childAbsoluteY)
-
-        // Apply child transformations
-        const scaleX = child.scaleX || 1
-        const scaleY = child.scaleY || 1
-        const angle = child.angle || 0
-
-        if (angle !== 0) {
-          ctx.rotate((angle * Math.PI) / 180)
-        }
-        ctx.scale(scaleX, scaleY)
-
-        if (child.type === "i-text" || child.type === "text") {
-          renderText(ctx, child)
-        } else if (child.type === "image") {
-          await renderImage(ctx, child)
-        }
-
-        ctx.restore()
-      }
-    }
-  } else {
-    // Standalone objects
-    ctx.save()
-
-    const x = obj.left || 0
-    const y = obj.top || 0
-    const width = obj.width || 0
-    const height = obj.height || 0
-    const originX = obj.originX || "left"
-    const originY = obj.originY || "top"
-
-    // Calculate actual position based on origin
-    let actualX = x
-    let actualY = y
-
-    if (originX === "center") {
-      actualX = x - width / 2
-    } else if (originX === "right") {
-      actualX = x - width
-    }
-
-    if (originY === "center") {
-      actualY = y - height / 2
-    } else if (originY === "bottom") {
-      actualY = y - height
-    }
-
-    ctx.translate(actualX, actualY)
-
-    if (obj.type === "i-text" || obj.type === "text") {
-      renderText(ctx, obj)
-    } else if (obj.type === "image") {
-      await renderImage(ctx, obj)
-    }
-
-    ctx.restore()
-  }
-}
-
-function renderText(ctx, textObj) {
-  const text = textObj.text || ""
-  if (!text) return
-
-  const fontSize = textObj.fontSize || 16
-  const fontFamily = textObj.fontFamily || "Arial"
-  const fontWeight = textObj.fontWeight || "normal"
-  const fill = textObj.fill || "#000000"
-
-  ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`
-  ctx.textAlign = "left"
-  ctx.textBaseline = "top"
-  ctx.fillStyle = fill
-
-  ctx.fillText(text, 0, 0)
-}
-
-async function renderImage(ctx, imageObj) {
   try {
-    const src = imageObj.src
-    if (!src) return
+    // Set viewport size
+    await page.setViewport({ width: 1200, height: 800 })
 
-    const img = await loadImage(src)
-    const width = imageObj.width || img.width
-    const height = imageObj.height || img.height
+    // Load HTML template
+    await page.setContent(htmlTemplate)
 
-    ctx.drawImage(img, 0, 0, width, height)
-  } catch (error) {
-    console.error("Error loading image:", imageObj.src, error)
-    const width = imageObj.width || 100
-    const height = imageObj.height || 100
-    ctx.fillStyle = "#cccccc"
-    ctx.fillRect(0, 0, width, height)
-    ctx.fillStyle = "#666666"
-    ctx.font = "12px Arial"
-    ctx.fillText("Image Error", 10, 20)
+    // Wait for Fabric.js to load
+    await page.waitForFunction(() => typeof window.fabric !== "undefined")
+
+    // Render the canvas
+    await page.evaluate((data) => {
+      return window.renderFabricCanvas(data)
+    }, fabricData)
+
+    // Wait for images to load
+    await page.waitForTimeout(2000)
+
+    // Take screenshot of just the canvas
+    const canvasElement = await page.$("#canvas-container")
+    const screenshot = await canvasElement.screenshot({
+      type: "png",
+      omitBackground: false,
+    })
+
+    return screenshot
+  } finally {
+    await page.close()
   }
 }
 
+// API endpoint
 app.post("/render", async (req, res) => {
   try {
     const fabricData = req.body
@@ -193,26 +123,25 @@ app.post("/render", async (req, res) => {
       })
     }
 
-    const canvas = await renderFabricCanvasFromJSON(fabricData)
+    console.log("Rendering canvas with Puppeteer + Fabric.js...")
 
+    const screenshot = await renderCanvasToPNG(fabricData)
+
+    // Save PNG
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-")
     const filename = `fabric-canvas-${timestamp}.png`
     const filepath = path.join(outputDir, filename)
 
-    const buffer = canvas.toBuffer("image/png")
-    fs.writeFileSync(filepath, buffer)
+    fs.writeFileSync(filepath, screenshot)
 
     console.log(`Canvas rendered: ${filepath}`)
 
     res.json({
       success: true,
-      message: "Canvas rendered successfully",
+      message: "Canvas rendered successfully with Fabric.js",
       filename: filename,
       filepath: filepath,
-      size: {
-        width: canvas.width,
-        height: canvas.height,
-      },
+      method: "puppeteer + fabric.js",
     })
   } catch (error) {
     console.error("Error:", error)
@@ -223,11 +152,28 @@ app.post("/render", async (req, res) => {
   }
 })
 
+// Health check
 app.get("/health", (req, res) => {
-  res.json({ status: "OK" })
+  res.json({ status: "OK", method: "puppeteer + fabric.js" })
 })
 
-app.listen(PORT, () => {
+// Graceful shutdown
+process.on("SIGINT", async () => {
+  if (browser) {
+    await browser.close()
+  }
+  process.exit(0)
+})
+
+app.listen(PORT, async () => {
   console.log(`Server running on http://localhost:${PORT}`)
   console.log(`Output directory: ${path.resolve(outputDir)}`)
+  console.log("Initializing browser...")
+
+  try {
+    await initBrowser()
+    console.log("Browser initialized successfully")
+  } catch (error) {
+    console.error("Failed to initialize browser:", error)
+  }
 })
