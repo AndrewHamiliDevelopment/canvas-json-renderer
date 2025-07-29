@@ -117,7 +117,7 @@ async function initBrowser() {
       )
     }
 
-    browser = await puppeteer.launch({executablePath: process.env.CHROMIUM_EXEC, headless: true})
+    browser = await puppeteer.launch({executablePath: process.env.CHROMIUM_EXEC, headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'], timeout: 60000})
   }
   return browser
 }
