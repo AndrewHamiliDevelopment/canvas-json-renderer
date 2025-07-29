@@ -117,7 +117,7 @@ async function initBrowser() {
       )
     }
 
-    browser = await puppeteer.launch({executablePath: process.env.CHROMIUM_EXEC})
+    browser = await puppeteer.launch({executablePath: process.env.CHROMIUM_EXEC, headless: true})
   }
   return browser
 }
